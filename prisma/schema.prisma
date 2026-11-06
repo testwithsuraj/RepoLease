@@ -1,0 +1,130 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum GrantStatus {
+  SCHEDULED
+  ACTIVE
+  REVOKED
+  MANUALLY_OVERRIDDEN
+  REVOCATION_FAILED
+}
+
+enum PermissionLevel {
+  pull
+  triage
+  push
+  maintain
+  admin
+}
+
+model Installation {
+  id               BigInt         @id
+  accountLogin     String
+  accountId        BigInt
+  accountType      String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  repositories     Repository[]
+  requests         AccessRequest[]
+  grants           AccessGrant[]
+  auditLogs        AuditLog[]
+}
+
+model Repository {
+  id             BigInt         @id
+  installationId BigInt
+  name           String
+  fullName       String
+  isPrivate      Boolean        @default(false)
+  installation   Installation   @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  requests       AccessRequest[]
+  grants         AccessGrant[]
+  auditLogs      AuditLog[]
+}
+
+model AccessRequest {
+  id              String          @id @default(uuid())
+  installationId  BigInt
+  repositoryId    BigInt
+  issueNumber     Int
+  commentId       BigInt?
+  requesterLogin  String
+  requesterId     BigInt
+  targetUserLogin String
+  targetUserId    BigInt
+  permission      PermissionLevel
+  durationString  String
+  status          RequestStatus   @default(PENDING)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  installation    Installation    @relation(fields: [installationId], references: [id])
+  repository      Repository      @relation(fields: [repositoryId], references: [id])
+  grant           AccessGrant?
+  approvals       Approval[]
+}
+
+model AccessGrant {
+  id                  String          @id @default(uuid())
+  requestId           String          @unique
+  installationId      BigInt
+  repositoryId        BigInt
+  targetUserLogin     String
+  targetUserId        BigInt
+  permission          PermissionLevel
+  status              GrantStatus     @default(ACTIVE)
+  grantedAt           DateTime        @default(now())
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  retryCount          Int             @default(0)
+  githubInvitationId  BigInt?
+
+  installation        Installation    @relation(fields: [installationId], references: [id])
+  repository          Repository      @relation(fields: [repositoryId], references: [id])
+  request             AccessRequest   @relation(fields: [requestId], references: [id])
+}
+
+model Approval {
+  id              String        @id @default(uuid())
+  requestId       String
+  approverLogin   String
+  approverId      BigInt
+  decision        String
+  createdAt       DateTime      @default(now())
+
+  request         AccessRequest @relation(fields: [requestId], references: [id])
+}
+
+model AuditLog {
+  id              String        @id @default(uuid())
+  installationId  BigInt
+  repositoryId    BigInt
+  action          String
+  actorLogin      String
+  targetLogin     String?
+  details         Json
+  timestamp       DateTime      @default(now())
+
+  installation    Installation  @relation(fields: [installationId], references: [id])
+  repository      Repository    @relation(fields: [repositoryId], references: [id])
+}
+
+model ProcessedWebhook {
+  deliveryId  String   @id
+  eventType   String
+  processedAt DateTime @default(now())
+}
