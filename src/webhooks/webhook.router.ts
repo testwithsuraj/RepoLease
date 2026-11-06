@@ -1,5 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { getInstallationOctokit, postGrantReply } from '../services/github.service';
+import { 
+  getInstallationOctokit, 
+  postInitialLeaseComment, 
+  updateLeaseCommentToRevoked 
+} from '../services/github.service';
 import { fetchRepositoryPolicy } from '../services/policy.service';
 
 export async function webhookRoutes(fastify: FastifyInstance) {
@@ -26,9 +30,9 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       const owner = payload.repository.owner.login;
       const repo = payload.repository.name;
       const issueNumber = payload.issue.number;
-      const commentId = payload.comment.id;
+      const userCommentId = payload.comment.id;
 
-      // Parse: /repolease request @username 1m push
+      // Syntax: /repolease request @username 1m push
       const parts = commentBody.trim().split(/\s+/);
       const command = parts[1];
       const targetUser = parts[2]?.replace('@', '');
@@ -38,10 +42,10 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       if (command === 'request' && targetUser) {
         const client = octokit.rest || octokit;
 
-        // 1. Fetch policy
+        // 1. Verify repo policy
         await fetchRepositoryPolicy(octokit, owner, repo);
 
-        // 2. Add collaborator on GitHub
+        // 2. Grant repository collaborator role
         await client.repos.addCollaborator({
           owner,
           repo,
@@ -49,12 +53,12 @@ export async function webhookRoutes(fastify: FastifyInstance) {
           permission: permission as any,
         });
 
-        // 3. Compute expiration
+        const grantedAt = new Date();
         const durationMinutes = parseInt(durationStr.replace('m', '')) || 1;
         const expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
 
-        // 4. Post concise thank-you confirmation
-        await postGrantReply(
+        // 3. Post active lease card
+        const statusComment = await postInitialLeaseComment(
           octokit,
           owner,
           repo,
@@ -65,16 +69,43 @@ export async function webhookRoutes(fastify: FastifyInstance) {
           expiresAt
         );
 
-        // 5. Delete original command comment so issue thread stays clean
+        // 4. Delete the triggering command comment to keep thread pristine
         try {
           await client.issues.deleteComment({
             owner,
             repo,
-            comment_id: commentId,
+            comment_id: userCommentId,
           });
         } catch (delErr) {
           fastify.log.warn(`Could not delete user comment: ${delErr}`);
         }
+
+        // 5. In-memory / Worker timeout to edit the comment upon lease expiry
+        const delayMs = durationMinutes * 60 * 1000;
+        setTimeout(async () => {
+          try {
+            // Revoke access from repository
+            await client.repos.removeCollaborator({
+              owner,
+              repo,
+              username: targetUser,
+            });
+
+            // Edit active comment into collapsed audit log
+            await updateLeaseCommentToRevoked(
+              octokit,
+              owner,
+              repo,
+              statusComment.data.id,
+              targetUser,
+              durationStr,
+              permission,
+              grantedAt
+            );
+          } catch (revokeErr) {
+            fastify.log.error(`Auto-revocation failed for ${targetUser}: ${revokeErr}`);
+          }
+        }, delayMs);
 
         return reply.status(200).send({ status: 'granted', targetUser, expiresAt });
       }

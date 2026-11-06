@@ -32,7 +32,10 @@ export async function getInstallationOctokit(installationId: number): Promise<Oc
   return (await app.getInstallationOctokit(installationId)) as Octokit;
 }
 
-export async function postGrantReply(
+/**
+ * Creates the initial active lease message on the issue
+ */
+export async function postInitialLeaseComment(
   octokit: any,
   owner: string,
   repo: string,
@@ -43,45 +46,62 @@ export async function postGrantReply(
   expiresAt: Date
 ) {
   const client = octokit.rest || octokit;
-  const commentBody = [
-    `✨ **Thank you!** Collaborator access has been assigned to @${username}.`,
+  const body = [
+    `### 🟢 RepoLease: Active Collaborator Access`,
     ``,
+    `Access has been granted to @${username}:`,
     `- **Permission:** \`${permission}\``,
     `- **Duration:** \`${duration}\``,
-    `- **Expires at:** \`${expiresAt.toUTCString()}\``,
+    `- **Auto-Revocation:** \`${expiresAt.toUTCString()}\``,
     ``,
-    `> Access will automatically revoke once the timer ends.`
+    `> ⏱️ *This status card will automatically collapse and log audit details once the lease concludes.*`
   ].join('\n');
 
   return client.issues.createComment({
     owner,
     repo,
     issue_number: issueNumber,
-    body: commentBody,
+    body,
   });
 }
 
-export async function postRevokeReply(
+/**
+ * Replaces the active status card with a collapsed audit summary
+ */
+export async function updateLeaseCommentToRevoked(
   octokit: any,
   owner: string,
   repo: string,
-  issueNumber: number,
+  commentId: number,
   username: string,
-  reason: string = 'Lease expired'
+  duration: string,
+  permission: string,
+  grantedAt: Date
 ) {
   const client = octokit.rest || octokit;
-  const commentBody = [
-    `⏱️ **Access Revoked:** Temporary lease for @${username} has concluded.`,
-    `- **Reason:** ${reason}`,
-    `- **Timestamp:** \`${new Date().toUTCString()}\``,
+  const revokedAt = new Date();
+
+  const body = [
+    `<details>`,
+    `<summary>🔒 <b>RepoLease: Access Expired & Revoked (@${username})</b></summary>`,
     ``,
-    `Thank you!`
+    `| Attribute | Detail |`,
+    `| :--- | :--- |`,
+    `| **Collaborator** | @${username} |`,
+    `| **Granted Role** | \`${permission}\` |`,
+    `| **Lease Duration** | \`${duration}\` |`,
+    `| **Granted At** | ${grantedAt.toUTCString()} |`,
+    `| **Revoked At** | ${revokedAt.toUTCString()} |`,
+    `| **Status** | Revoked (Access Cleaned) |`,
+    ``,
+    `*Session concluded automatically. Audit log preserved.*`,
+    `</details>`
   ].join('\n');
 
-  return client.issues.createComment({
+  return client.issues.updateComment({
     owner,
     repo,
-    issue_number: issueNumber,
-    body: commentBody,
+    comment_id: commentId,
+    body,
   });
 }
